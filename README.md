@@ -26,6 +26,16 @@ The IPA is unsigned on purpose. A sideloading tool signs it with your own Apple 
 3. On the iPhone: Settings > Privacy & Security > turn on **Developer Mode** (iOS 16 and later, needs a restart), then Settings > General > VPN & Device Management > trust your Apple ID.
 4. A free Apple ID app expires after **7 days** (re-run Sideloadly to refresh it) and you can have 3 sideloaded apps at once. AltStore is an alternative that can refresh the app over Wi-Fi.
 
+## Natural AI voices (same as the desktop studio)
+
+The app uses Microsoft's official **Azure Speech** service, which has the same neural voices as the desktop studio (Andrew, Brian, Ava, Emma, Ryan, Sonia, Connor, Emily and more). The free tier (F0) includes about 500,000 characters a month.
+
+1. Make a free account at https://portal.azure.com and create a **Speech service** resource on the **Free F0** tier.
+2. Open it, go to **Keys and Endpoint**, copy **KEY 1** and the **Location/Region** (for example `eastus`).
+3. In the app tap the gear icon, paste the key, pick the region and press **Save & test**.
+
+The key is stored in the iPhone Keychain. Script text is sent to Microsoft only when you use an AI voice.
+
 ## Using the app
 
 * **Script:** paste, load a .txt/.md, or press Example. `# Title` shows a chapter banner, `*word*` highlights a word, `[point] [think] [happy]` and the other tags control gestures and eyes, `[idea]` shows a lightbulb, `[image: roman forum]` picks the picture to search for, `[noimage]` keeps the studio background.

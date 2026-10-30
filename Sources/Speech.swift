@@ -3,9 +3,11 @@ import Foundation
 
 enum StudioError: LocalizedError {
     case message(String)
+    case cancelled
     var errorDescription: String? {
         switch self {
         case .message(let m): return m
+        case .cancelled: return "Cancelled"
         }
     }
 }

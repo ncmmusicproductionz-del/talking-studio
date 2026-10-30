@@ -4,6 +4,7 @@ import UIKit
 enum VideoExport {
     /// Draws every frame and writes a silent H.264 .mp4.
     static func writeFrames(renderer: FrameRenderer, frames: Int, fps: Int, width: Int, height: Int, to url: URL,
+                            shouldCancel: @escaping () -> Bool = { false },
                             progress: @escaping (Double) -> Void) throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -36,6 +37,10 @@ enum VideoExport {
         let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
 
         for i in 0..<frames {
+            if shouldCancel() {
+                writer.cancelWriting()
+                throw StudioError.cancelled
+            }
             try autoreleasepool {
                 while !input.isReadyForMoreMediaData {
                     if writer.status == .failed { break }

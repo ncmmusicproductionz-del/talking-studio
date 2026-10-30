@@ -1,11 +1,32 @@
 import AVFoundation
 import UIKit
 
+/// Lets the screen stop a video that is being made.
+final class CancelToken {
+    private let lock = NSLock()
+    private var flag = false
+    func cancel() {
+        lock.lock()
+        flag = true
+        lock.unlock()
+    }
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return flag
+    }
+}
+
+enum VoiceChoice {
+    case azure(voice: String, key: String, region: String)
+    case device(id: String?)
+    case recording(URL)
+}
+
 struct StudioOptions {
     var script: String
-    var voiceID: String?
+    var voice: VoiceChoice
     var speed: Double
-    var ownAudio: URL?
     var landscape: Bool
     var highQuality: Bool
     var captions: Bool
@@ -21,6 +42,14 @@ struct StudioResult {
     var credits: [String]
     var warnings: [String]
     var seconds: Double
+}
+
+struct VideoMeta: Codable {
+    var title: String
+    var created: Date
+    var seconds: Double
+    var voice: String
+    var preview: Bool
 }
 
 enum Pipeline {
@@ -127,7 +156,18 @@ enum Pipeline {
         return (backdrops, credits, warnings)
     }
 
-    static func run(_ o: StudioOptions, progress: @escaping (String, Double) -> Void) async throws -> StudioResult {
+    static func voiceLabel(_ v: VoiceChoice) -> String {
+        switch v {
+        case .azure(let voice, _, _): return AIVoices.voice(for: voice).name + " (natural AI)"
+        case .device: return "iPhone voice"
+        case .recording: return "Your recording"
+        }
+    }
+
+    static func run(_ o: StudioOptions, cancel: CancelToken, progress: @escaping (String, Double) -> Void) async throws -> StudioResult {
+        func check() throws {
+            if cancel.isCancelled { throw StudioError.cancelled }
+        }
         progress("Reading the script", 0.0)
         var sentences = ScriptParser.parse(o.script)
         if sentences.isEmpty { throw StudioError.message("The script is empty. Paste some narration first.") }
@@ -138,16 +178,26 @@ enum Pipeline {
 
         // voice
         let voiceM4A = work.appendingPathComponent("voice.m4a")
-        if let own = o.ownAudio {
+        let spoken = ScriptParser.spokenText(sentences)
+        switch o.voice {
+        case .recording(let url):
             progress("Preparing your recording", 0.03)
-            try await AudioTools.toM4A(own, voiceM4A)
-        } else {
+            try await AudioTools.toM4A(url, voiceM4A)
+        case .device(let id):
             progress("Making the voiceover", 0.03)
             let caf = work.appendingPathComponent("voice.caf")
-            try await SpeechSynth().synthesize(text: ScriptParser.spokenText(sentences), voiceID: o.voiceID, speedPercent: o.speed, to: caf)
+            try await SpeechSynth().synthesize(text: spoken, voiceID: id, speedPercent: o.speed, to: caf)
             progress("Preparing the audio", 0.08)
             try await AudioTools.toM4A(caf, voiceM4A)
+        case .azure(let voice, let key, let region):
+            progress("Making the natural voiceover", 0.03)
+            let mp3 = work.appendingPathComponent("voice.mp3")
+            try await AzureSpeech.synthesize(text: spoken, voice: voice, speedPercent: o.speed, key: key, region: region, to: mp3,
+                                             shouldCancel: { cancel.isCancelled })
+            progress("Preparing the audio", 0.08)
+            try await AudioTools.toM4A(mp3, voiceM4A)
         }
+        try check()
 
         progress("Listening to the audio", 0.1)
         let analysis = try AudioAnalyzer.analyze(url: voiceM4A, fps: fps)
@@ -164,6 +214,7 @@ enum Pipeline {
             credits = r.1
             warnings = r.2
         }
+        try check()
 
         // frames
         let width: Int
@@ -196,9 +247,11 @@ enum Pipeline {
                                      backdrops: backdrops, dim: o.dim, captions: o.captions)
 
         let silent = work.appendingPathComponent("silent.mp4")
-        try VideoExport.writeFrames(renderer: renderer, frames: frames, fps: fps, width: width, height: height, to: silent) { f in
+        try VideoExport.writeFrames(renderer: renderer, frames: frames, fps: fps, width: width, height: height, to: silent,
+                                    shouldCancel: { cancel.isCancelled }) { f in
             progress("Animating the character", 0.18 + 0.72 * f)
         }
+        try check()
 
         progress("Adding the voice", 0.93)
         let stamp = DateFormatter()
@@ -214,6 +267,16 @@ enum Pipeline {
             let text = "Images used in this video (paste into your video description):\n\n" + credits.joined(separator: "\n") + "\n"
             try? text.write(to: cu, atomically: true, encoding: .utf8)
             creditsURL = cu
+        }
+
+        // a little sidecar file so the My Videos tab can show a title
+        let firstLine = o.script.split(whereSeparator: { $0.isNewline }).map { String($0) }
+            .first(where: { !$0.hasPrefix("#") && !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? "Talking video"
+        let cleanTitle = firstLine.replacingOccurrences(of: "*", with: "").trimmingCharacters(in: .whitespaces)
+        let title = cleanTitle.count > 48 ? String(cleanTitle.prefix(48)) + "..." : cleanTitle
+        let meta = VideoMeta(title: title, created: Date(), seconds: total, voice: voiceLabel(o.voice), preview: o.previewSeconds != nil)
+        if let data = try? JSONEncoder().encode(meta) {
+            try? data.write(to: folder.appendingPathComponent(name + ".json"))
         }
         progress("Done", 1.0)
         return StudioResult(videoURL: finalURL, creditsURL: creditsURL, credits: credits, warnings: warnings, seconds: total)
