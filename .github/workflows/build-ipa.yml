@@ -1,22 +1,56 @@
-# This workflow will build a Swift project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-swift
-
-name: Swift
+name: Build unsigned IPA
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: [main]
 
 jobs:
   build:
-
-    runs-on: macos-latest
-
+    runs-on: macos-14
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: swift build -v
-    - name: Run tests
-      run: swift test -v
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Build for iPhone (no code signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project TalkingStudio.xcodeproj \
+            -scheme TalkingStudio \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log
+
+      - name: Package the IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/TalkingStudio.app Payload/
+          zip -qry TalkingStudio-unsigned.ipa Payload
+          ls -la TalkingStudio-unsigned.ipa
+
+      - name: Upload the IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: TalkingStudio-unsigned-ipa
+          path: TalkingStudio-unsigned.ipa
+
+      - name: Upload the build log (useful if something fails)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
